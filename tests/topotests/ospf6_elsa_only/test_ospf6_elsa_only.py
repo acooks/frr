@@ -79,7 +79,9 @@ import sys
 import pytest
 import json
 from time import sleep
+import functools
 from functools import partial
+import time
 
 # Save the Current Working Directory to find configuration files.
 CWD = os.path.dirname(os.path.realpath(__file__))
