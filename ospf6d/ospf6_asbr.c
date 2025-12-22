@@ -644,7 +644,8 @@ void ospf6_asbr_lsa_add(struct ospf6_lsa *lsa)
 	if (OSPF6_LSA_IS_TYPE(NETWORK, lsa))
 		external = lsa_after_header(lsa->header);
 	else /* E_NETWORK */
-		external = lsa_after_header(lsa->header) + sizeof(struct tlv_header);
+		external = (struct ospf6_as_external_lsa *)((char *)lsa_after_header(lsa->header) +
+							    sizeof(struct tlv_header));
 
 	if (IS_OSPF6_DEBUG_EXAMIN(AS_EXTERNAL))
 		zlog_debug("Calculate AS-External route for %s", lsa->name);
@@ -3352,7 +3353,7 @@ static void ospf6_aggr_handle_external_info(void *data)
 			if (IS_OSPF6_DEBUG_AGGR)
 				zlog_debug("%s: ELSA found, refresh it",
 					   __func__);
-			EVENT_OFF(lsa->refresh);
+			event_cancel(&lsa->refresh);
 			event_add_event(master, ospf6_lsa_refresh, lsa, 0,
 					&lsa->refresh);
 			return;
