@@ -129,7 +129,10 @@ static struct ospf6_vertex *ospf6_vertex_create(struct ospf6_lsa *lsa)
 	/* Associated LSA */
 	v->lsa = ospf6_lsa_lock(lsa);
 
-	/* capability bits + options */
+	/* capability bits + options
+	 * For both legacy and E-Router/E-Network LSAs, the options field
+	 * is at the same offset (right after the LSA header).
+	 */
 	v->capability = *(uint8_t *)(ospf6_lsa_header_end(lsa->header));
 	v->options[0] = *(uint8_t *)(ospf6_lsa_header_end(lsa->header) + 1);
 	v->options[1] = *(uint8_t *)(ospf6_lsa_header_end(lsa->header) + 2);
@@ -1427,12 +1430,21 @@ int ospf6_ase_calculate_route(struct ospf6 *ospf6, struct ospf6_lsa *lsa,
 		return 0;
 	}
 
-	external = lsa_after_header(lsa->header);
+	uint16_t type = ntohs(lsa->header->type);
+
+	/* E-LSA types have TLV header before external data */
+	if (type == OSPF6_LSTYPE_AS_EXTERNAL || type == OSPF6_LSTYPE_TYPE_7)
+		external = lsa_after_header(lsa->header);
+	else /* E_AS_EXTERNAL or E_TYPE_7 */
+		external = (struct ospf6_as_external_lsa *)
+			TLV_BODY(lsa_after_header(lsa->header));
+
 	prefix.family = AF_INET6;
 	prefix.prefixlen = external->prefix.prefix_length;
 	ospf6_prefix_in6_addr(&prefix.u.prefix6, external, &external->prefix);
 
-	if (ntohs(lsa->header->type) == OSPF6_LSTYPE_AS_EXTERNAL) {
+	if (type == OSPF6_LSTYPE_AS_EXTERNAL ||
+	    type == OSPF6_LSTYPE_E_AS_EXTERNAL) {
 		hook_add = ospf6->route_table->hook_add;
 		hook_remove = ospf6->route_table->hook_remove;
 		ospf6->route_table->hook_add = NULL;
@@ -1467,7 +1479,7 @@ int ospf6_ase_calculate_route(struct ospf6 *ospf6, struct ospf6_lsa *lsa,
 				(*hook_add)(route);
 			}
 		}
-	} else if (ntohs(lsa->header->type) == OSPF6_LSTYPE_TYPE_7) {
+	} else if (type == OSPF6_LSTYPE_TYPE_7 || type == OSPF6_LSTYPE_E_TYPE_7) {
 		hook_add = area->route_table->hook_add;
 		hook_remove = area->route_table->hook_remove;
 		area->route_table->hook_add = NULL;
@@ -1527,6 +1539,11 @@ static void ospf6_ase_calculate_timer(struct event *t)
 	for (ALL_LSDB_TYPED(ospf6->lsdb, type, lsa))
 		ospf6_ase_calculate_route(ospf6, lsa, NULL);
 
+	/* Calculate external route for each E-AS-external-LSA */
+	type = htons(OSPF6_LSTYPE_E_AS_EXTERNAL);
+	for (ALL_LSDB_TYPED(ospf6->lsdb, type, lsa))
+		ospf6_ase_calculate_route(ospf6, lsa, NULL);
+
 	/*  This version simple adds to the table all NSSA areas  */
 	if (ospf6->anyNSSA) {
 		for (ALL_LIST_ELEMENTS(ospf6->area_list, node, nnode, area)) {
@@ -1534,6 +1551,10 @@ static void ospf6_ase_calculate_timer(struct event *t)
 				zlog_debug("%s : looking at area %s", __func__, area->name);
 
 			type = htons(OSPF6_LSTYPE_TYPE_7);
+			for (ALL_LSDB_TYPED(area->lsdb, type, lsa))
+				ospf6_ase_calculate_route(ospf6, lsa, area);
+
+			type = htons(OSPF6_LSTYPE_E_TYPE_7);
 			for (ALL_LSDB_TYPED(area->lsdb, type, lsa))
 				ospf6_ase_calculate_route(ospf6, lsa, area);
 		}
