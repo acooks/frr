@@ -36,6 +36,7 @@
 #include "ospf6_asbr.h"
 #include "ospf6d.h"
 #include "ospf6_nssa.h"
+#include "ospf6_tlv.h"
 #include "ospf6d/ospf6_nssa_clippy.c"
 
 DEFINE_MTYPE_STATIC(OSPF6D, OSPF6_LSA,         "OSPF6 LSA");
@@ -357,6 +358,7 @@ struct ospf6_lsa *ospf6_translated_nssa_refresh(struct ospf6_area *area,
 	if (type5 == NULL) {
 		struct ospf6_as_external_lsa *ext_lsa;
 		struct ospf6_route *match;
+		uint16_t ltype = ntohs(type7->header->type);
 
 		/* Find the AS external LSA from Type-7 LSA */
 		if (IS_OSPF6_DEBUG_NSSA)
@@ -364,7 +366,13 @@ struct ospf6_lsa *ospf6_translated_nssa_refresh(struct ospf6_area *area,
 				"%s: try to find translated Type-5 LSA for %s",
 				__func__, type7->name);
 
-		ext_lsa = lsa_after_header(type7->header);
+		/* E-LSA types have TLV header before external data */
+		if (ltype == OSPF6_LSTYPE_TYPE_7)
+			ext_lsa = lsa_after_header(type7->header);
+		else /* E_TYPE_7 */
+			ext_lsa = (struct ospf6_as_external_lsa *)
+				TLV_BODY(lsa_after_header(type7->header));
+
 		prefix.family = AF_INET6;
 		prefix.prefixlen = ext_lsa->prefix.prefix_length;
 		ospf6_prefix_in6_addr(&prefix.u.prefix6, ext_lsa,
@@ -429,9 +437,17 @@ static void ospf6_abr_translate_nssa(struct ospf6_area *area,
 	struct prefix prefix;
 	struct ospf6_route *match;
 	struct ospf6 *ospf6;
+	uint16_t ltype;
 
 	ospf6 = area->ospf6;
-	nssa_lsa = lsa_after_header(lsa->header);
+	ltype = ntohs(lsa->header->type);
+
+	/* E-LSA types have TLV header before external data */
+	if (ltype == OSPF6_LSTYPE_TYPE_7)
+		nssa_lsa = lsa_after_header(lsa->header);
+	else /* E_TYPE_7 */
+		nssa_lsa = (struct ospf6_as_external_lsa *)
+			TLV_BODY(lsa_after_header(lsa->header));
 
 	if (!CHECK_FLAG(nssa_lsa->prefix.prefix_options,
 			OSPF6_PREFIX_OPTION_P)) {
