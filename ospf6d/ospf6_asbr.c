@@ -334,15 +334,30 @@ static route_tag_t ospf6_as_external_lsa_get_tag(struct ospf6_lsa *lsa)
 	struct ospf6_as_external_lsa *external;
 	ptrdiff_t tag_offset;
 	route_tag_t network_order;
+	uint16_t type;
 
 	if (!lsa)
 		return 0;
 
-	external = lsa_after_header(lsa->header);
+	type = ntohs(lsa->header->type);
+
+	/* E-LSA types have TLV header before external data */
+	if (type == OSPF6_LSTYPE_AS_EXTERNAL || type == OSPF6_LSTYPE_TYPE_7)
+		external = lsa_after_header(lsa->header);
+	else /* E_AS_EXTERNAL or E_TYPE_7 */
+		external = (struct ospf6_as_external_lsa *)
+			TLV_BODY(lsa_after_header(lsa->header));
 
 	if (!CHECK_FLAG(external->bits_metric, OSPF6_ASBR_BIT_T))
 		return 0;
 
+	/*
+	 * FIXME: For E-LSAs (RFC 8362), route tags are encoded as Route-Tag
+	 * sub-TLVs (type 3), not inline after the prefix. The code below only
+	 * handles the legacy inline format from RFC 5340. E-LSA tag support
+	 * requires parsing sub-TLVs within the External-Prefix TLV.
+	 * See also: ospf6_originate_external_lsa_e() which has a similar TODO.
+	 */
 	tag_offset = sizeof(*external)
 		     + OSPF6_PREFIX_SPACE(external->prefix.prefix_length);
 	if (CHECK_FLAG(external->bits_metric, OSPF6_ASBR_BIT_F))
@@ -641,11 +656,12 @@ void ospf6_asbr_lsa_add(struct ospf6_lsa *lsa)
 	type = ntohs(lsa->header->type);
 	oa = lsa->lsdb->data;
 
-	if (OSPF6_LSA_IS_TYPE(NETWORK, lsa))
+	/* E-LSA types have TLV header before external data */
+	if (type == OSPF6_LSTYPE_AS_EXTERNAL || type == OSPF6_LSTYPE_TYPE_7)
 		external = lsa_after_header(lsa->header);
-	else /* E_NETWORK */
-		external = (struct ospf6_as_external_lsa *)((char *)lsa_after_header(lsa->header) +
-							    sizeof(struct tlv_header));
+	else /* E_AS_EXTERNAL or E_TYPE_7 */
+		external = (struct ospf6_as_external_lsa *)
+			TLV_BODY(lsa_after_header(lsa->header));
 
 	if (IS_OSPF6_DEBUG_EXAMIN(AS_EXTERNAL))
 		zlog_debug("Calculate AS-External route for %s", lsa->name);
@@ -850,13 +866,18 @@ void ospf6_asbr_lsa_remove(struct ospf6_lsa *lsa,
 	int type;
 	bool debug = false;
 
-	external = lsa_after_header(lsa->header);
-
 	if (IS_OSPF6_DEBUG_EXAMIN(AS_EXTERNAL) || (IS_OSPF6_DEBUG_NSSA))
 		debug = true;
 
 	ospf6 = ospf6_get_by_lsdb(lsa);
 	type = ntohs(lsa->header->type);
+
+	/* E-LSA types have TLV header before external data */
+	if (type == OSPF6_LSTYPE_AS_EXTERNAL || type == OSPF6_LSTYPE_TYPE_7)
+		external = lsa_after_header(lsa->header);
+	else /* E_AS_EXTERNAL or E_TYPE_7 */
+		external = (struct ospf6_as_external_lsa *)
+			TLV_BODY(lsa_after_header(lsa->header));
 
 	if (type == OSPF6_LSTYPE_TYPE_7 || type == OSPF6_LSTYPE_E_TYPE_7) {
 		if (debug)
