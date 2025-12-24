@@ -119,9 +119,32 @@ void ospf6_abr_disable_area(struct ospf6_area *area)
 	/* Withdraw all summary prefixes previously originated */
 	for (ro = ospf6_route_head(area->summary_prefix); ro; ro = nro) {
 		nro = ospf6_route_next(ro);
-		old = ospf6_lsdb_lookup(ro->path.origin.type,
-					ro->path.origin.id,
-					area->ospf6->router_id, area->lsdb);
+		switch (area->ospf6->extended_lsa_support) {
+		case OSPF6_E_LSA_SUP_LEGACY:
+			old = ospf6_lsdb_lookup(htons(OSPF6_LSTYPE_INTER_PREFIX),
+						ro->path.origin.id,
+						area->ospf6->router_id,
+						area->lsdb);
+			break;
+		case OSPF6_E_LSA_SUP_ELSA:
+			old = ospf6_lsdb_lookup(htons(OSPF6_LSTYPE_E_INTER_PREFIX),
+						ro->path.origin.id,
+						area->ospf6->router_id,
+						area->lsdb);
+			break;
+		case OSPF6_E_LSA_SUP_BOTH:
+			old = ospf6_lsdb_lookup(htons(OSPF6_LSTYPE_INTER_PREFIX),
+						ro->path.origin.id,
+						area->ospf6->router_id,
+						area->lsdb);
+			if (old)
+				ospf6_lsa_purge(old);
+			old = ospf6_lsdb_lookup(htons(OSPF6_LSTYPE_E_INTER_PREFIX),
+						ro->path.origin.id,
+						area->ospf6->router_id,
+						area->lsdb);
+			break;
+		}
 		if (old)
 			ospf6_lsa_purge(old);
 		ospf6_route_remove(ro, area->summary_prefix);
@@ -130,9 +153,32 @@ void ospf6_abr_disable_area(struct ospf6_area *area)
 	/* Withdraw all summary router-routes previously originated */
 	for (ro = ospf6_route_head(area->summary_router); ro; ro = nro) {
 		nro = ospf6_route_next(ro);
-		old = ospf6_lsdb_lookup(ro->path.origin.type,
-					ro->path.origin.id,
-					area->ospf6->router_id, area->lsdb);
+		switch (area->ospf6->extended_lsa_support) {
+		case OSPF6_E_LSA_SUP_LEGACY:
+			old = ospf6_lsdb_lookup(htons(OSPF6_LSTYPE_INTER_ROUTER),
+						ro->path.origin.id,
+						area->ospf6->router_id,
+						area->lsdb);
+			break;
+		case OSPF6_E_LSA_SUP_ELSA:
+			old = ospf6_lsdb_lookup(htons(OSPF6_LSTYPE_E_INTER_ROUTER),
+						ro->path.origin.id,
+						area->ospf6->router_id,
+						area->lsdb);
+			break;
+		case OSPF6_E_LSA_SUP_BOTH:
+			old = ospf6_lsdb_lookup(htons(OSPF6_LSTYPE_INTER_ROUTER),
+						ro->path.origin.id,
+						area->ospf6->router_id,
+						area->lsdb);
+			if (old)
+				ospf6_lsa_purge(old);
+			old = ospf6_lsdb_lookup(htons(OSPF6_LSTYPE_E_INTER_ROUTER),
+						ro->path.origin.id,
+						area->ospf6->router_id,
+						area->lsdb);
+			break;
+		}
 		if (old)
 			ospf6_lsa_purge(old);
 		ospf6_route_remove(ro, area->summary_router);
