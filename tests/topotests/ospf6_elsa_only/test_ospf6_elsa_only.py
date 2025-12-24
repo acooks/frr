@@ -435,6 +435,41 @@ def test_elsa_presence_area4():
     _, result = topotest.run_and_expect(test_func, None, count=60, wait=1)
     assert result is None, f'{router} missing ELSA {elsa_name}.'
 
+
+#
+# Test route tag propagation via E-AS-External LSA
+#
+# RT7 redistributes a static route 2001:db8:7777::/64 with route-map SET-TAG (tag 777)
+# Verify the tag is carried in the E-AS-External LSA and propagates to RT1
+#
+route_tag_expected = {
+    "2001:db8:7777::/64": [
+        {
+            "protocol": "ospf6",
+            "tag": 777
+        }
+    ]
+}
+
+def test_route_tag_propagation():
+    logger.info("Test: verify route tag propagation via E-AS-External LSA")
+    tgen = get_topogen()
+
+    # Skip if previous fatal error condition is raised
+    if tgen.routers_have_failure():
+        pytest.skip(tgen.errors)
+
+    router = "rt1"
+    logger.info('"%s" checking route tag from RT7', router)
+    test_func = partial(
+        topotest.router_json_cmp,
+        tgen.gears[router],
+        "show ipv6 route json",
+        route_tag_expected,
+    )
+    _, result = topotest.run_and_expect(test_func, None, count=60, wait=1)
+    assert result is None, f'{router} missing route tag from RT7: {result}'
+
 def run_and_expect_absence(func, what, count=3, wait=1):
     """
     Run `func` and compare the result with `what`. Do it for `count` times

@@ -166,6 +166,24 @@ struct ospf6_prefix *get_prefix_in_tlv(struct tlv_header *tlvh);
  *
  * RFC 8362 - OSPFv3 Link State Advertisement (LSA) Extensibility
  */
+/*
+ * Sub-TLV structures for External-Prefix TLVs
+ * RFC 8362 Section 3.6
+ */
+#define STLV_ROUTE_TAG_TYPE 3
+#define STLV_ROUTE_TAG_LENGTH 4U
+struct stlv_route_tag {
+	struct tlv_header header;
+	uint32_t tag;
+};
+
+#define STLV_IPV6_FWD_ADDR_TYPE 1
+#define STLV_IPV6_FWD_ADDR_LENGTH 16U
+struct stlv_ipv6_fwd_addr {
+	struct tlv_header header;
+	struct in6_addr addr;
+};
+
 enum ospf6_extended_lsa_stlv_types {
 	OSPF6_STLV_RESERVED = 0,
 	OSPF6_STLV_IPV6_FWD_ADDR = 1,

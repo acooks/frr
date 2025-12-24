@@ -264,15 +264,29 @@ struct ospf6_lsa *ospf6_e_as_external_lsa_originate(struct ospf6_route *route,
 
 	/* forwarding address */
 	if (!IN6_IS_ADDR_UNSPECIFIED(&info->forwarding)) {
-		/* TODO:
-		 * create IPv6-Forwarding-Address sTLV or
-		 * IPv4-Forwarding-Address sTLV
-		 */
+		struct stlv_ipv6_fwd_addr *stlv_fwd =
+			(struct stlv_ipv6_fwd_addr *)buf_end;
+
+		stlv_fwd->header.type = htons(STLV_IPV6_FWD_ADDR_TYPE);
+		stlv_fwd->header.length = htons(STLV_IPV6_FWD_ADDR_LENGTH);
+		memcpy(&stlv_fwd->addr, &info->forwarding,
+		       sizeof(struct in6_addr));
+		buf_end += sizeof(struct stlv_ipv6_fwd_addr);
 	}
 
 	/* external route tag */
 	if (info->tag) {
-		/* TODO: create Route-Tag sub-TLV */
+		struct stlv_route_tag *stlv_tag =
+			(struct stlv_route_tag *)buf_end;
+
+		stlv_tag->header.type = htons(STLV_ROUTE_TAG_TYPE);
+		stlv_tag->header.length = htons(STLV_ROUTE_TAG_LENGTH);
+		stlv_tag->tag = htonl(info->tag);
+		buf_end += sizeof(struct stlv_route_tag);
+
+		if (IS_OSPF6_DEBUG_ASBR || IS_OSPF6_DEBUG_ORIGINATE(AS_EXTERNAL))
+			zlog_debug("E-ASE LSA: adding Route-Tag sub-TLV tag=%u",
+				   info->tag);
 	}
 
 	/* TLV header */
@@ -341,31 +355,69 @@ static route_tag_t ospf6_as_external_lsa_get_tag(struct ospf6_lsa *lsa)
 
 	type = ntohs(lsa->header->type);
 
-	/* E-LSA types have TLV header before external data */
-	if (type == OSPF6_LSTYPE_AS_EXTERNAL || type == OSPF6_LSTYPE_TYPE_7)
+	/* Legacy LSAs have tag inline after prefix (if T bit set) */
+	if (type == OSPF6_LSTYPE_AS_EXTERNAL || type == OSPF6_LSTYPE_TYPE_7) {
 		external = lsa_after_header(lsa->header);
-	else /* E_AS_EXTERNAL or E_TYPE_7 */
-		external = (struct ospf6_as_external_lsa *)
-			TLV_BODY(lsa_after_header(lsa->header));
 
-	if (!CHECK_FLAG(external->bits_metric, OSPF6_ASBR_BIT_T))
+		if (!CHECK_FLAG(external->bits_metric, OSPF6_ASBR_BIT_T))
+			return 0;
+
+		/* Legacy format: tag is inline after prefix (and optional fwd addr) */
+		tag_offset = sizeof(*external)
+			     + OSPF6_PREFIX_SPACE(external->prefix.prefix_length);
+		if (CHECK_FLAG(external->bits_metric, OSPF6_ASBR_BIT_F))
+			tag_offset += sizeof(struct in6_addr);
+
+		memcpy(&network_order, (caddr_t)external + tag_offset,
+		       sizeof(network_order));
+		return ntohl(network_order);
+	}
+
+	/* E_AS_EXTERNAL or E_TYPE_7: parse sub-TLVs for Route-Tag */
+	{
+		struct tlv_header *tlvh = lsa_after_header(lsa->header);
+		struct tlv_header *stlv;
+		char *stlv_end;
+		char *tlv_end;
+
+		/* Get the External-Prefix TLV body (bits_metric + ospf6_prefix) */
+		external = (struct ospf6_as_external_lsa *)TLV_BODY(tlvh);
+
+		/* Calculate where sub-TLVs start (after prefix address bytes) */
+		stlv = (struct tlv_header *)((char *)external->prefix.addr +
+			OSPF6_PREFIX_SPACE(external->prefix.prefix_length));
+
+		/* End of the External-Prefix TLV */
+		tlv_end = TLV_BODY(tlvh) + ntohs(tlvh->length);
+
+		if (IS_OSPF6_DEBUG_EXAMIN(E_AS_EXTERNAL))
+			zlog_debug("E-ASE get_tag: TLV len=%u stlv_start=%p tlv_end=%p",
+				   ntohs(tlvh->length), stlv, tlv_end);
+
+		/* Iterate through sub-TLVs looking for Route-Tag */
+		while ((char *)stlv < tlv_end) {
+			stlv_end = TLV_BODY(stlv) + ntohs(stlv->length);
+			if (stlv_end > tlv_end)
+				break;
+
+			if (IS_OSPF6_DEBUG_EXAMIN(E_AS_EXTERNAL))
+				zlog_debug("E-ASE get_tag: sub-TLV type=%u len=%u",
+					   ntohs(stlv->type), ntohs(stlv->length));
+
+			if (ntohs(stlv->type) == STLV_ROUTE_TAG_TYPE) {
+				struct stlv_route_tag *tag_stlv =
+					(struct stlv_route_tag *)stlv;
+				if (IS_OSPF6_DEBUG_EXAMIN(E_AS_EXTERNAL))
+					zlog_debug("E-ASE get_tag: found tag=%u",
+						   ntohl(tag_stlv->tag));
+				return ntohl(tag_stlv->tag);
+			}
+
+			stlv = TLV_HDR_NEXT(stlv);
+		}
+
 		return 0;
-
-	/*
-	 * FIXME: For E-LSAs (RFC 8362), route tags are encoded as Route-Tag
-	 * sub-TLVs (type 3), not inline after the prefix. The code below only
-	 * handles the legacy inline format from RFC 5340. E-LSA tag support
-	 * requires parsing sub-TLVs within the External-Prefix TLV.
-	 * See also: ospf6_originate_external_lsa_e() which has a similar TODO.
-	 */
-	tag_offset = sizeof(*external)
-		     + OSPF6_PREFIX_SPACE(external->prefix.prefix_length);
-	if (CHECK_FLAG(external->bits_metric, OSPF6_ASBR_BIT_F))
-		tag_offset += sizeof(struct in6_addr);
-
-	memcpy(&network_order, (caddr_t)external + tag_offset,
-	       sizeof(network_order));
-	return ntohl(network_order);
+	}
 }
 
 void ospf6_asbr_update_route_ecmp_path(struct ospf6_route *old,
@@ -594,6 +646,9 @@ void ospf6_asbr_update_route_ecmp_path(struct ospf6_route *old,
 						? listcount(old_route->nh_list)
 						: 0);
 
+			/* Update tag from new route */
+			old_route->path.tag = route->path.tag;
+
 			/* Update RIB/FIB */
 			if (ospf6->route_table->hook_add)
 				(*ospf6->route_table->hook_add)(old_route);
@@ -816,15 +871,16 @@ void ospf6_asbr_lsa_add(struct ospf6_lsa *lsa)
 	listnode_add_sort(route->paths, path);
 
 
-	if (IS_OSPF6_DEBUG_EXAMIN(AS_EXTERNAL))
+	if (IS_OSPF6_DEBUG_EXAMIN(AS_EXTERNAL) ||
+	    IS_OSPF6_DEBUG_EXAMIN(E_AS_EXTERNAL))
 		zlog_debug(
-			"%s: %s %u route add %pFX cost %u(%u) nh %u", __func__,
+			"%s: %s %u route add %pFX cost %u(%u) nh %u tag %u", __func__,
 			(type == OSPF6_LSTYPE_AS_EXTERNAL ||
 			type == OSPF6_LSTYPE_E_AS_EXTERNAL) ? "AS-External"
 							   : "NSSA",
 			(route->path.type == OSPF6_PATH_TYPE_EXTERNAL1) ? 1 : 2,
 			&route->prefix, route->path.cost, route->path.u.cost_e2,
-			listcount(route->nh_list));
+			listcount(route->nh_list), route->path.tag);
 
 	if (type == OSPF6_LSTYPE_AS_EXTERNAL || type == OSPF6_LSTYPE_E_AS_EXTERNAL)
 		old = ospf6_route_lookup(&route->prefix, ospf6->route_table);

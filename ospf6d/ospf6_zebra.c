@@ -478,6 +478,8 @@ static void ospf6_zebra_route_update(int type, struct ospf6_route *request,
 	if (request->path.tag) {
 		SET_FLAG(api.message, ZAPI_MESSAGE_TAG);
 		api.tag = request->path.tag;
+		if (IS_OSPF6_DEBUG_ZEBRA(SEND))
+			zlog_debug("  Setting tag %u", api.tag);
 	}
 
 	SET_FLAG(api.message, ZAPI_MESSAGE_DISTANCE);
