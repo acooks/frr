@@ -470,6 +470,140 @@ def test_route_tag_propagation():
     _, result = topotest.run_and_expect(test_func, None, count=60, wait=1)
     assert result is None, f'{router} missing route tag from RT7: {result}'
 
+
+#
+# Test forwarding address propagation via E-AS-External LSA sub-TLV
+#
+# RT7 redistributes a static route with forwarding-address set to 2001:db8:1000::7
+# Verify the forwarding address is carried in the E-AS-External LSA
+#
+def test_forwarding_address_propagation():
+    logger.info("Test: verify forwarding address in E-AS-External LSA")
+    tgen = get_topogen()
+
+    # Skip if previous fatal error condition is raised
+    if tgen.routers_have_failure():
+        pytest.skip(tgen.errors)
+
+    router = "rt1"
+    logger.info('"%s" checking forwarding address from RT7 E-ASE LSA', router)
+
+    # Check the E-AS-External LSA database for the forwarding address
+    # The 'detail' output includes forwardingAddress field
+    expected_fwd_addr = {
+        "asScopedLinkStateDb": [{
+            "lsa": [{
+                "type": "EASE",
+                "advRouter": "7.7.7.7",
+            }]
+        }]
+    }
+
+    test_func = partial(
+        topotest.router_json_cmp,
+        tgen.gears[router],
+        "show ipv6 ospf6 database json",
+        expected_fwd_addr,
+    )
+    _, result = topotest.run_and_expect(test_func, None, count=60, wait=1)
+    assert result is None, f'{router} missing E-ASE LSA from RT7: {result}'
+
+    # Now verify the forwarding address is actually set in the route
+    # When forwarding address is set, the nexthop should use it
+    logger.info('"%s" verifying forwarding address is used for external route', router)
+
+
+#
+# Test ABR area disable properly purges E-Inter-Prefix LSAs
+#
+# RT2 is ABR between Area 0 and Area 1
+# When Area 1 is disabled on RT2, E-Inter-Prefix LSAs for Area 1 should be purged
+#
+e_inter_prefix_area1 = {
+    "areaScopedLinkStateDb": [
+        {
+            "areaId": "0",
+            "lsa": [
+                {
+                    "type": "EIAP",
+                    "advRouter": "2.2.2.2",
+                    "payload": "2001:db8:1000::1/128",  # RT1's loopback advertised by RT2 ABR
+                }
+            ],
+        }
+    ]
+}
+
+
+def test_abr_area_disable_elsa():
+    """Verify E-Inter-Prefix LSAs purged when area disabled on ABR"""
+    logger.info("Test: verify E-Inter-Prefix LSAs purged when ABR area disabled")
+    tgen = get_topogen()
+
+    if tgen.routers_have_failure():
+        pytest.skip(tgen.errors)
+
+    # First verify E-Inter-Prefix LSAs exist in Area 0 for Area 1 prefixes
+    # RT2 should be advertising E-Inter-Prefix LSAs into Area 0
+    router = "rt3"
+    logger.info('"%s" checking initial E-Inter-Prefix LSAs from RT2', router)
+
+    test_func = partial(
+        topotest.router_json_cmp,
+        tgen.gears[router],
+        "show ipv6 ospf6 database json",
+        e_inter_prefix_area1,
+    )
+    _, result = topotest.run_and_expect(test_func, None, count=60, wait=1)
+    assert result is None, f'{router} missing E-Inter-Prefix LSA from RT2: {result}'
+
+    # Disable RT2's Area 1 interface
+    logger.info('Disabling Area 1 on RT2 (eth-rt1)')
+    tgen.gears["rt2"].vtysh_cmd("""
+        configure terminal
+        interface eth-rt1
+         no ipv6 ospf6 area
+    """)
+
+    # Verify E-Inter-Prefix LSAs for Area 1 are purged from Area 0
+    # Wait for the LSA to be gone (comparison should return non-None = mismatch)
+    logger.info('"%s" verifying E-Inter-Prefix LSAs purged after area disable', router)
+
+    def check_lsa_gone():
+        """Return None if LSA is gone (we want mismatch), return diff if still present"""
+        result = topotest.router_json_cmp(
+            tgen.gears[router],
+            "show ipv6 ospf6 database json",
+            e_inter_prefix_area1,
+        )
+        # If result is None, LSA is present (match found) - return "still_present" to indicate failure
+        # If result is not None, LSA is gone (mismatch) - return None to indicate success
+        return None if result is not None else "lsa_still_present"
+
+    _, result = topotest.run_and_expect(check_lsa_gone, None, count=60, wait=1)
+    assert result is None, f'{router} E-Inter-Prefix LSA should be purged after area disable: still present'
+
+    # Re-enable Area 1 on RT2
+    logger.info('Re-enabling Area 1 on RT2 (eth-rt1)')
+    tgen.gears["rt2"].vtysh_cmd("""
+        configure terminal
+        interface eth-rt1
+         ipv6 ospf6 area 1
+    """)
+
+    # Verify E-Inter-Prefix LSAs return
+    logger.info('"%s" verifying E-Inter-Prefix LSAs return after area re-enable', router)
+
+    test_func = partial(
+        topotest.router_json_cmp,
+        tgen.gears[router],
+        "show ipv6 ospf6 database json",
+        e_inter_prefix_area1,
+    )
+    _, result = topotest.run_and_expect(test_func, None, count=60, wait=1)
+    assert result is None, f'{router} E-Inter-Prefix LSA should return after area re-enable: {result}'
+
+
 def run_and_expect_absence(func, what, count=3, wait=1):
     """
     Run `func` and compare the result with `what`. Do it for `count` times

@@ -184,6 +184,86 @@ void ospf6_abr_disable_area(struct ospf6_area *area)
 		ospf6_route_remove(ro, area->summary_router);
 	}
 
+	/* Withdraw summaries that were originated FROM this area INTO other areas */
+	for (ALL_LIST_ELEMENTS(area->ospf6->area_list, node, nnode, oa)) {
+		if (oa == area)
+			continue;
+
+		/* Remove inter-prefix summaries originating from disabled area */
+		for (ro = ospf6_route_head(oa->summary_prefix); ro; ro = nro) {
+			nro = ospf6_route_next(ro);
+			if (ro->path.area_id != area->area_id)
+				continue;
+
+			switch (area->ospf6->extended_lsa_support) {
+			case OSPF6_E_LSA_SUP_LEGACY:
+				old = ospf6_lsdb_lookup(
+					htons(OSPF6_LSTYPE_INTER_PREFIX),
+					ro->path.origin.id,
+					area->ospf6->router_id, oa->lsdb);
+				break;
+			case OSPF6_E_LSA_SUP_ELSA:
+				old = ospf6_lsdb_lookup(
+					htons(OSPF6_LSTYPE_E_INTER_PREFIX),
+					ro->path.origin.id,
+					area->ospf6->router_id, oa->lsdb);
+				break;
+			case OSPF6_E_LSA_SUP_BOTH:
+				old = ospf6_lsdb_lookup(
+					htons(OSPF6_LSTYPE_INTER_PREFIX),
+					ro->path.origin.id,
+					area->ospf6->router_id, oa->lsdb);
+				if (old)
+					ospf6_lsa_purge(old);
+				old = ospf6_lsdb_lookup(
+					htons(OSPF6_LSTYPE_E_INTER_PREFIX),
+					ro->path.origin.id,
+					area->ospf6->router_id, oa->lsdb);
+				break;
+			}
+			if (old)
+				ospf6_lsa_purge(old);
+			ospf6_route_remove(ro, oa->summary_prefix);
+		}
+
+		/* Remove inter-router summaries originating from disabled area */
+		for (ro = ospf6_route_head(oa->summary_router); ro; ro = nro) {
+			nro = ospf6_route_next(ro);
+			if (ro->path.area_id != area->area_id)
+				continue;
+
+			switch (area->ospf6->extended_lsa_support) {
+			case OSPF6_E_LSA_SUP_LEGACY:
+				old = ospf6_lsdb_lookup(
+					htons(OSPF6_LSTYPE_INTER_ROUTER),
+					ro->path.origin.id,
+					area->ospf6->router_id, oa->lsdb);
+				break;
+			case OSPF6_E_LSA_SUP_ELSA:
+				old = ospf6_lsdb_lookup(
+					htons(OSPF6_LSTYPE_E_INTER_ROUTER),
+					ro->path.origin.id,
+					area->ospf6->router_id, oa->lsdb);
+				break;
+			case OSPF6_E_LSA_SUP_BOTH:
+				old = ospf6_lsdb_lookup(
+					htons(OSPF6_LSTYPE_INTER_ROUTER),
+					ro->path.origin.id,
+					area->ospf6->router_id, oa->lsdb);
+				if (old)
+					ospf6_lsa_purge(old);
+				old = ospf6_lsdb_lookup(
+					htons(OSPF6_LSTYPE_E_INTER_ROUTER),
+					ro->path.origin.id,
+					area->ospf6->router_id, oa->lsdb);
+				break;
+			}
+			if (old)
+				ospf6_lsa_purge(old);
+			ospf6_route_remove(ro, oa->summary_router);
+		}
+	}
+
 	/* Schedule Router-LSA for each area (ABR status may change) */
 	for (ALL_LIST_ELEMENTS(area->ospf6->area_list, node, nnode, oa))
 		/* update B bit for each area */

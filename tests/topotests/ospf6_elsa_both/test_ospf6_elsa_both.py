@@ -154,7 +154,7 @@ def setup_module(mod):
         )
 
     tgen.start_router()
-    tgen.mininet_cli()
+    #tgen.mininet_cli()
 
 def teardown_module():
     "Teardown the pytest environment"
@@ -518,6 +518,50 @@ def test_elsa_detail():
         )
         _, result = topotest.run_and_expect(test_func, None, count=60, wait=1)
         assert result is None, f'{router} missing ELSA detail {elsa_name}.'
+
+
+#
+# Test that "both" mode originates both legacy and E-LSA types for the same route
+#
+# RT7 redistributes connected routes in "both" mode
+# Verify both ASE and EASE LSAs are present for RT7's routes
+#
+expected_both_mode_ase = {
+    "asScopedLinkStateDb": [{
+        "lsa": [
+            {
+                "type": "ASE",
+                "advRouter": "7.7.7.7",
+            },
+            {
+                "type": "EASE",
+                "advRouter": "7.7.7.7",
+            }
+        ]
+    }]
+}
+
+
+def test_both_mode_lsa_coexistence():
+    """Verify both legacy ASE and E-ASE LSAs are originated in 'both' mode"""
+    logger.info("Test: verify both ASE and EASE LSAs exist in 'both' mode")
+    tgen = get_topogen()
+
+    if tgen.routers_have_failure():
+        pytest.skip(tgen.errors)
+
+    # Check from RT1's perspective (should see both types from RT7)
+    router = "rt1"
+    logger.info('"%s" checking for both ASE and EASE from RT7', router)
+
+    test_func = partial(
+        topotest.router_json_cmp,
+        tgen.gears[router],
+        "show ipv6 ospf6 database json",
+        expected_both_mode_ase,
+    )
+    _, result = topotest.run_and_expect(test_func, None, count=60, wait=1)
+    assert result is None, f'{router} should have both ASE and EASE from RT7: {result}'
 
 
 # Memory leak test template
